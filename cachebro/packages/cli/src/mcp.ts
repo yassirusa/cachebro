@@ -33,16 +33,24 @@ export async function startMcpServer(): Promise<void> {
 
   server.tool(
     "read_file",
-    `Read a file with caching. On first read, returns full content and caches it.
+    `Read a file with caching. Use this tool INSTEAD of the built-in Read tool for reading files.
+On first read, returns full content and caches it — identical to Read.
 On subsequent reads, if the file hasn't changed, returns a short confirmation instead of the full content — saving significant tokens.
 If the file changed, returns only the diff (changed lines) instead of the full file.
-ALWAYS prefer this over raw file reads for massive token savings on files you've read before.`,
+Supports offset and limit for partial reads — and partial reads are also cached. If only lines outside the requested range changed, returns a short confirmation saving tokens.
+Set force=true to bypass the cache and get the full file content (use when you no longer have the original in context).
+ALWAYS prefer this over the Read tool. It is a drop-in replacement with caching benefits.`,
     {
       path: z.string().describe("Path to the file to read"),
+      offset: z.number().optional().describe("Line number to start reading from (1-based). Only provide if the file is too large to read at once."),
+      limit: z.number().optional().describe("Number of lines to read. Only provide if the file is too large to read at once."),
+      force: z.boolean().optional().describe("Bypass cache and return full content"),
     },
-    async ({ path }) => {
+    async ({ path, force, offset, limit }) => {
       try {
-        const result = await cache.readFile(path);
+        const result = force
+          ? await cache.readFileFull(path)
+          : await cache.readFile(path, { offset, limit });
         let text = "";
         if (result.cached && result.linesChanged === 0) {
           text = result.content;
@@ -64,9 +72,9 @@ ALWAYS prefer this over raw file reads for massive token savings on files you've
 
   server.tool(
     "read_files",
-    `Read multiple files at once with caching. Same benefits as read_file but batched.
-Returns cached/diff results for each file. Use this when you need to read several files —
-it's faster than multiple individual reads and saves even more tokens.`,
+    `Read multiple files at once with caching. Use this tool INSTEAD of the built-in Read tool when you need to read several files.
+Same behavior as read_file but batched. Returns cached/diff results for each file.
+ALWAYS prefer this over multiple Read calls — it's faster and saves significant tokens.`,
     {
       paths: z.array(z.string()).describe("Paths to the files to read"),
     },

@@ -4,9 +4,19 @@ File cache with diff tracking for AI coding agents. Powered by [Turso](https://t
 
 Agents waste most of their token budget re-reading files they've already seen. cachebro fixes this: on first read it caches the file, on subsequent reads it returns either "unchanged" (one line instead of the whole file) or a compact diff of what changed. Drop-in replacement for file reads that agents adopt on their own.
 
-## Why this matters
+## Benchmark
 
-We ran 3 related coding tasks sequentially on a 1,000-file TypeScript codebase ([opencode](https://github.com/sst/opencode)) using Claude Opus as the agent. Each task touched overlapping files in the same area of the codebase — the normal pattern when you're working on a feature across multiple sessions.
+We ran a controlled A/B test: the same refactoring task on a 268-file TypeScript codebase ([opencode](https://github.com/sst/opencode)), same agent (Claude Opus), same prompt. The only difference: cachebro enabled vs disabled.
+
+| | Without cachebro | With cachebro |
+|---|---:|---:|
+| Total tokens | 158,248 | 117,188 |
+| Tool calls | 60 | 58 |
+| Files touched | 12 | 12 |
+
+**26% fewer tokens. Same task, same result.** cachebro saved ~33,000 tokens by serving cached reads and compact diffs instead of full file contents.
+
+The savings compound over sequential tasks on the same codebase:
 
 | Task | Tokens Used | Tokens Saved by Cache | Cumulative Savings |
 |------|------------:|----------------------:|-------------------:|
@@ -14,16 +24,11 @@ We ran 3 related coding tasks sequentially on a 1,000-file TypeScript codebase (
 | 2. Add --since flag to session list | 41,167 | 15,571 | 18,496 |
 | 3. Add session stats subcommand | 63,169 | 35,355 | 53,851 |
 
-By task 3, cachebro saved **35,355 tokens in a single task** — files cached during tasks 1 and 2 were served as one-line confirmations instead of full content. Over the 3-task sequence, **53,851 tokens saved out of 166,526 consumed (~24%)**.
-
-At scale, this compounds:
-- A full day of coding (20+ related tasks): **300-400k tokens saved per developer per day**
-- On Claude Opus ($15/M input tokens): **$4.50-$6.00/day per developer**
-- Fleet of 10,000 developers: **$1M+/year in saved API costs**
+By task 3, cachebro saved **35,355 tokens in a single task** — a 36% reduction. Over the 3-task sequence, **53,851 tokens saved out of 166,526 consumed (~24%)**.
 
 ### Agents adopt it without being told
 
-We tested whether agents would use cachebro voluntarily. We launched a coding agent with cachebro configured as an MCP server but **gave the agent no instructions about it**. The agent chose `cachebro.read_files` as its very first action — preferring batched cached reads over built-in file read tools. The tool descriptions alone were enough.
+We tested whether agents would use cachebro voluntarily. We launched a coding agent with cachebro configured as an MCP server but **gave the agent no instructions about it**. The agent chose `cachebro.read_file` over the built-in Read tool on its own. The tool descriptions alone were enough.
 
 ## How it works
 
@@ -31,6 +36,7 @@ We tested whether agents would use cachebro voluntarily. We launched a coding ag
 First read:   agent reads src/auth.ts → cachebro caches content + hash → returns full file
 Second read:  agent reads src/auth.ts → hash unchanged → returns "[unchanged, 245 lines, 1,837 tokens saved]"
 After edit:   agent reads src/auth.ts → hash changed → returns unified diff (only changed lines)
+Partial read: agent reads lines 50-60 → edit changed line 200 → returns "[unchanged in lines 50-60]"
 ```
 
 The cache persists in a local [Turso](https://turso.tech) (SQLite-compatible) database. Content hashing (SHA-256) detects changes. No network, no external services, no configuration beyond a file path.
@@ -38,22 +44,27 @@ The cache persists in a local [Turso](https://turso.tech) (SQLite-compatible) da
 ## Installation
 
 ```bash
-bun add cachebro-sdk              # SDK
-bun add -g cachebro               # CLI
+npx cachebro serve    # just works, no install needed
+```
+
+Or install globally:
+
+```bash
+npm install -g cachebro
 ```
 
 ## Usage
 
 ### As an MCP server (recommended)
 
-Add to your `.mcp.json` (for Claude Code, Cursor, or any MCP-compatible agent):
+Add to your `.claude/settings.json`, `.cursor/mcp.json`, or any MCP-compatible agent config:
 
 ```json
 {
   "mcpServers": {
     "cachebro": {
-      "command": "bun",
-      "args": ["run", "cachebro", "serve"]
+      "command": "npx",
+      "args": ["cachebro", "serve"]
     }
   }
 }
@@ -63,12 +74,12 @@ The MCP server exposes 4 tools:
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read a file with caching. Returns full content on first read, "unchanged" or diff on subsequent reads. |
+| `read_file` | Read a file with caching. Returns full content on first read, "unchanged" or diff on subsequent reads. Supports `offset`/`limit` for partial reads. |
 | `read_files` | Batch read multiple files with caching. |
 | `cache_status` | Show stats: files tracked, tokens saved. |
 | `cache_clear` | Reset the cache. |
 
-Agents discover these tools automatically and prefer them over raw file reads because the tool descriptions advertise token savings.
+Agents discover these tools automatically and prefer them over built-in file reads because the tool descriptions advertise token savings.
 
 ### As a CLI
 
@@ -83,10 +94,11 @@ Set `CACHEBRO_DIR` to control where the cache database is stored (default: `.cac
 ### As an SDK
 
 ```typescript
-import { createCache } from "cachebro-sdk";
+import { createCache } from "@turso/cachebro";
 
 const { cache, watcher } = createCache({
   dbPath: "./my-cache.db",
+  sessionId: "my-session-1",  // each session tracks reads independently
   watchPaths: ["."],          // optional: watch for file changes
 });
 
@@ -109,28 +121,30 @@ const r3 = await cache.readFile("src/auth.ts");
 // r3.diff === "--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -10,3 +10,4 @@..."
 // r3.linesChanged === 3
 
+// Partial read — only the lines you need
+const r4 = await cache.readFile("src/auth.ts", { offset: 50, limit: 10 });
+// Returns lines 50-59, or "[unchanged in lines 50-59]" if nothing changed there
+
 // Stats
 const stats = await cache.getStats();
-// { filesTracked: 12, tokensSaved: 53851, ... }
+// { filesTracked: 12, tokensSaved: 53851, sessionTokensSaved: 33205 }
 
 // Cleanup
 watcher.close();
 ```
 
-The SDK has no opinions about embeddings, models, or AI providers. It's a cache. You read files through it, it tracks what changed.
-
 ## Architecture
 
 ```
 packages/
-  sdk/     cachebro-sdk — the library
+  sdk/     @turso/cachebro — the library
            - CacheStore: content-addressed file cache backed by Turso (via @tursodatabase/database)
            - FileWatcher: fs.watch wrapper for change notification
            - computeDiff: line-based unified diff
   cli/     cachebro — batteries-included CLI + MCP server
 ```
 
-**Database:** Single [Turso](https://turso.tech) database file with one table (`file_cache`) mapping absolute file paths to their content, SHA-256 hash, line count, and timestamps. A `stats` table tracks cumulative tokens saved.
+**Database:** Single [Turso](https://turso.tech) database file with `file_versions` (content-addressed, keyed by path + hash), `session_reads` (per-session read pointers), and `stats`/`session_stats` tables. Multiple sessions and branch switches are handled correctly — each session tracks which version it last saw.
 
 **Change detection:** On every read, cachebro hashes the current file content and compares it to the cached hash. Same hash = unchanged. Different hash = compute diff, update cache. No polling, no watchers required for correctness — the hash is the source of truth.
 

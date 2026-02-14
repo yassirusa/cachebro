@@ -67,7 +67,7 @@ export class CacheStore {
     return this.db;
   }
 
-  async readFile(filePath: string): Promise<FileReadResult> {
+  async readFile(filePath: string, options?: { offset?: number; limit?: number }): Promise<FileReadResult> {
     await this.init();
     const db = this.getDb();
     const { readFileSync, statSync } = await import("fs");
@@ -78,8 +78,26 @@ export class CacheStore {
 
     const currentContent = readFileSync(absPath, "utf-8");
     const currentHash = contentHash(currentContent);
-    const currentLines = currentContent.split("\n").length;
+    const allLines = currentContent.split("\n");
+    const currentLines = allLines.length;
     const now = Date.now();
+
+    const offset = options?.offset ?? 0;
+    const limit = options?.limit ?? 0;
+    const isPartial = offset > 0 || limit > 0;
+
+    // Extract the requested line range from content
+    const sliceLines = (text: string): string => {
+      if (!isPartial) return text;
+      const lines = text.split("\n");
+      const start = offset > 0 ? offset - 1 : 0; // offset is 1-based
+      const end = limit > 0 ? start + limit : lines.length;
+      return lines.slice(start, end).join("\n");
+    };
+
+    const rangeStart = offset > 0 ? offset : 1; // 1-based
+    const rangeEnd = limit > 0 ? rangeStart + limit - 1 : currentLines;
+    const rangeLineCount = rangeEnd - rangeStart + 1;
 
     // What did THIS session last see for this file?
     const lastRead = await db.prepare(
@@ -90,25 +108,28 @@ export class CacheStore {
       const lastHash = (lastRead[0] as any).hash as string;
 
       if (lastHash === currentHash) {
-        // Same content this session already saw — big win
-        const tokensSaved = estimateTokens(currentContent);
-        await this.addTokensSaved(tokensSaved);
+        // Same content this session already saw
+        const slicedTokens = isPartial ? estimateTokens(sliceLines(currentContent)) : estimateTokens(currentContent);
+        await this.addTokensSaved(slicedTokens);
 
-        // Update read timestamp
         await db.prepare(
           "UPDATE session_reads SET read_at = ? WHERE session_id = ? AND path = ?"
         ).run(now, this.sessionId, absPath);
 
+        const label = isPartial
+          ? `[cachebro: unchanged, lines ${rangeStart}-${rangeEnd} of ${currentLines}, ${slicedTokens} tokens saved]`
+          : `[cachebro: unchanged, ${currentLines} lines, ${slicedTokens} tokens saved]`;
+
         return {
           cached: true,
-          content: `[cachebro: unchanged, ${currentLines} lines, ${tokensSaved} tokens saved]`,
+          content: label,
           hash: currentHash,
           totalLines: currentLines,
           linesChanged: 0,
         };
       }
 
-      // File changed since this session last read it — find the old version to diff against
+      // File changed — find old version to diff against
       const oldVersion = await db.prepare(
         "SELECT content FROM file_versions WHERE path = ? AND hash = ?"
       ).all(absPath, lastHash);
@@ -118,7 +139,7 @@ export class CacheStore {
         "INSERT OR IGNORE INTO file_versions (path, hash, content, lines, created_at) VALUES (?, ?, ?, ?, ?)"
       ).run(absPath, currentHash, currentContent, currentLines, now);
 
-      // Update session read pointer to new version
+      // Update session read pointer
       await db.prepare(
         "UPDATE session_reads SET hash = ?, read_at = ? WHERE session_id = ? AND path = ?"
       ).run(currentHash, now, this.sessionId, absPath);
@@ -128,6 +149,44 @@ export class CacheStore {
         const diffResult = computeDiff(oldContent, currentContent, filePath);
 
         if (diffResult.hasChanges) {
+          // Check if the requested range overlaps with changed lines
+          if (isPartial) {
+            let rangeHasChanges = false;
+            for (let l = rangeStart; l <= rangeEnd; l++) {
+              if (diffResult.changedNewLines.has(l)) {
+                rangeHasChanges = true;
+                break;
+              }
+            }
+
+            if (!rangeHasChanges) {
+              // Changes exist but NOT in the requested range
+              const slicedTokens = estimateTokens(sliceLines(currentContent));
+              await this.addTokensSaved(slicedTokens);
+              return {
+                cached: true,
+                content: `[cachebro: unchanged in lines ${rangeStart}-${rangeEnd}, changes elsewhere in file, ${slicedTokens} tokens saved]`,
+                hash: currentHash,
+                totalLines: currentLines,
+                linesChanged: 0,
+              };
+            }
+          }
+
+          // Changes overlap with requested range (or full-file read) — return diff or slice
+          if (isPartial) {
+            // Return just the requested lines from the new content
+            const sliced = sliceLines(currentContent);
+            const fullTokens = estimateTokens(sliced);
+            // No savings — we're returning the content they asked for
+            return {
+              cached: false,
+              content: sliced,
+              hash: currentHash,
+              totalLines: currentLines,
+            };
+          }
+
           const fullTokens = estimateTokens(currentContent);
           const diffTokens = estimateTokens(diffResult.diff);
           const saved = Math.max(0, fullTokens - diffTokens);
@@ -144,21 +203,52 @@ export class CacheStore {
         }
       }
 
-      // Old version not found in cache (pruned?) — return full content
+      // Old version not found or no changes detected — return content
+      const content = isPartial ? sliceLines(currentContent) : currentContent;
       return {
         cached: false,
-        content: currentContent,
+        content,
         hash: currentHash,
         totalLines: currentLines,
       };
     }
 
-    // First read in this session — check if we already have this version stored
+    // First read in this session
     await db.prepare(
       "INSERT OR IGNORE INTO file_versions (path, hash, content, lines, created_at) VALUES (?, ?, ?, ?, ?)"
     ).run(absPath, currentHash, currentContent, currentLines, now);
 
-    // Record that this session has seen this version
+    await db.prepare(
+      "INSERT OR REPLACE INTO session_reads (session_id, path, hash, read_at) VALUES (?, ?, ?, ?)"
+    ).run(this.sessionId, absPath, currentHash, now);
+
+    const content = isPartial ? sliceLines(currentContent) : currentContent;
+    return {
+      cached: false,
+      content,
+      hash: currentHash,
+      totalLines: currentLines,
+    };
+  }
+
+  async readFileFull(filePath: string): Promise<FileReadResult> {
+    await this.init();
+    const db = this.getDb();
+    const { readFileSync, statSync } = await import("fs");
+    const { resolve } = await import("path");
+
+    const absPath = resolve(filePath);
+    statSync(absPath);
+
+    const currentContent = readFileSync(absPath, "utf-8");
+    const currentHash = contentHash(currentContent);
+    const currentLines = currentContent.split("\n").length;
+    const now = Date.now();
+
+    await db.prepare(
+      "INSERT OR IGNORE INTO file_versions (path, hash, content, lines, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run(absPath, currentHash, currentContent, currentLines, now);
+
     await db.prepare(
       "INSERT OR REPLACE INTO session_reads (session_id, path, hash, read_at) VALUES (?, ?, ?, ?)"
     ).run(this.sessionId, absPath, currentHash, now);

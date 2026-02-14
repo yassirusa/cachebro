@@ -10,6 +10,8 @@ export interface DiffResult {
   linesChanged: number;
   /** Whether there are any changes */
   hasChanges: boolean;
+  /** Line numbers in the NEW file that were added or modified */
+  changedNewLines: Set<number>;
 }
 
 export function computeDiff(oldContent: string, newContent: string, filePath: string): DiffResult {
@@ -46,8 +48,16 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
     }
   }
 
+  // Collect which lines in the new file were changed
+  const changedNewLines = new Set<number>();
+  for (const rl of rawLines) {
+    if (rl.type === "add") changedNewLines.add(rl.newLine);
+    // For removals, mark the adjacent new line as affected
+    if (rl.type === "remove") changedNewLines.add(rl.newLine);
+  }
+
   if (linesChanged === 0) {
-    return { diff: "", linesChanged: 0, hasChanges: false };
+    return { diff: "", linesChanged: 0, hasChanges: false, changedNewLines };
   }
 
   // Group into hunks with 3 lines of context
@@ -107,6 +117,7 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
     diff: `${header}\n${hunks.join("\n")}`,
     linesChanged,
     hasChanges: true,
+    changedNewLines,
   };
 }
 

@@ -77,6 +77,56 @@ console.assert(r5b.linesChanged === 0, "No lines should have changed for session
 
 await cache2.close();
 
+// Test 6: Partial read (offset/limit) — first read of a new file
+console.log("\n--- Test 6: Partial read with offset/limit ---");
+const LONG_FILE = join(TEST_DIR, "long.ts");
+const longContent = Array.from({ length: 20 }, (_, i) => `line ${i + 1}: const x${i} = ${i};`).join("\n");
+writeFileSync(LONG_FILE, longContent);
+
+const r6 = await cache.readFile(LONG_FILE, { offset: 5, limit: 3 });
+console.log(`  cached: ${r6.cached}`);
+console.log(`  content: ${r6.content}`);
+console.assert(!r6.cached, "First partial read should not be cached");
+console.assert(r6.content.includes("line 5"), "Should include line 5");
+console.assert(r6.content.includes("line 7"), "Should include line 7");
+console.assert(!r6.content.includes("line 8"), "Should NOT include line 8");
+
+// Test 7: Partial read unchanged — should return cache hit
+console.log("\n--- Test 7: Partial read unchanged (should be cached) ---");
+const r7 = await cache.readFile(LONG_FILE, { offset: 5, limit: 3 });
+console.log(`  cached: ${r7.cached}`);
+console.log(`  content: ${r7.content}`);
+console.assert(r7.cached, "Second partial read should be cached");
+console.assert(r7.linesChanged === 0, "No lines should have changed");
+console.assert(r7.content.includes("unchanged"), "Should say unchanged");
+
+// Test 8: Modify lines outside the requested range — partial read still unchanged
+console.log("\n--- Test 8: Partial read, changes OUTSIDE requested range ---");
+const modifiedLines = longContent.split("\n");
+modifiedLines[0] = "line 1: MODIFIED";  // Change line 1 (outside range 5-7)
+modifiedLines[18] = "line 19: MODIFIED"; // Change line 19 (outside range 5-7)
+writeFileSync(LONG_FILE, modifiedLines.join("\n"));
+
+const r8 = await cache.readFile(LONG_FILE, { offset: 5, limit: 3 });
+console.log(`  cached: ${r8.cached}`);
+console.log(`  content: ${r8.content}`);
+console.assert(r8.cached, "Should be cached — changes outside requested range");
+console.assert(r8.linesChanged === 0, "Should report 0 lines changed in range");
+console.assert(r8.content.includes("unchanged"), "Should say unchanged");
+
+// Test 9: Modify lines INSIDE the requested range — should return content
+console.log("\n--- Test 9: Partial read, changes INSIDE requested range ---");
+modifiedLines[5] = "line 6: MODIFIED_IN_RANGE";  // Change line 6 (inside range 5-7)
+writeFileSync(LONG_FILE, modifiedLines.join("\n"));
+
+const r9 = await cache.readFile(LONG_FILE, { offset: 5, limit: 3 });
+console.log(`  cached: ${r9.cached}`);
+console.log(`  content: ${r9.content}`);
+console.assert(!r9.cached, "Should NOT be cached — changes inside requested range");
+console.assert(r9.content.includes("MODIFIED_IN_RANGE"), "Should include modified content");
+
+await cache2.close();
+
 // Cleanup
 watcher.close();
 await cache.close();
