@@ -1,6 +1,6 @@
 {
   "name": "cachebro",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "File cache with diff tracking for AI coding agents. Drop-in replacement for file reads that saves ~26% tokens.",
   "type": "module",
   "bin": {
@@ -42,7 +42,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/tursodatabase/cachebro"
+    "url": "https://github.com/glommer/cachebro"
   },
-  "homepage": "https://github.com/tursodatabase/cachebro"
+  "homepage": "https://github.com/glommer/cachebro"
 }
