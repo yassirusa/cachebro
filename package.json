@@ -1,6 +1,7 @@
 {
   "name": "cachebro",
-  "version": "0.2.0",
+  "version": "0.2.1",
+  "mcpName": "io.github.glommer/cachebro",
   "description": "File cache with diff tracking for AI coding agents. Drop-in replacement for file reads that saves ~26% tokens.",
   "type": "module",
   "bin": {
