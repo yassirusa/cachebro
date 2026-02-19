@@ -339,6 +339,74 @@ ALWAYS prefer this over multiple Read calls — it's faster and saves significan
   );
 
   server.tool(
+    "revert_file",
+    "Revert a file to a previous version from the cache. Use when an edit introduces a regression.",
+    {
+      path: z.string().describe("Path to the file to revert"),
+      steps_back: z.number().optional().default(1).describe("How many versions to go back (default: 1)"),
+    },
+    async ({ path, steps_back }) => {
+      isBusy = true;
+      try {
+        const result = await cache.revertFile(path, steps_back);
+        return { content: [{ type: "text" as const, text: result.message }], isError: !result.success };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+      } finally {
+        isBusy = false;
+      }
+    },
+  );
+
+  server.tool(
+    "get_working_set",
+    "List all files touched in this session with edit counts and status. Useful after context compaction to recover awareness of what you were working on.",
+    {},
+    async () => {
+      isBusy = true;
+      try {
+        const files = await cache.getWorkingSet();
+        if (files.length === 0) return { content: [{ type: "text" as const, text: "No files in working set yet." }] };
+        let text = `Working set (${files.length} files):\n`;
+        for (const f of files) {
+          text += `  ${f.status === "modified" ? "M" : "R"}  ${f.path}${f.edits > 0 ? ` (${f.edits} edits)` : ""}\n`;
+        }
+        return { content: [{ type: "text" as const, text }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+      } finally {
+        isBusy = false;
+      }
+    },
+  );
+
+  server.tool(
+    "search_history",
+    "View chronological log of file reads and writes in this session. Optionally filter by path substring.",
+    {
+      limit: z.number().optional().default(50).describe("Max entries to return"),
+      path_filter: z.string().optional().describe("Filter entries by path substring"),
+    },
+    async ({ limit, path_filter }) => {
+      isBusy = true;
+      try {
+        const entries = await cache.getHistory(limit, path_filter);
+        if (entries.length === 0) return { content: [{ type: "text" as const, text: "No history entries yet." }] };
+        let text = `Session history (${entries.length} entries):\n`;
+        for (const e of entries) {
+          const time = new Date(e.timestamp).toISOString().slice(11, 19);
+          text += `  [${time}] ${e.type.padEnd(5)} ${e.path}\n`;
+        }
+        return { content: [{ type: "text" as const, text }] };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+      } finally {
+        isBusy = false;
+      }
+    },
+  );
+
+  server.tool(
     "summarize_session",
     "Generate a comprehensive summary of the current session state, metrics, and token savings.",
     {},
