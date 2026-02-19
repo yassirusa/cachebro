@@ -3,6 +3,15 @@ import { startMcpServer } from "./mcp.js";
 
 const command = process.argv[2];
 
+const C = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  gray: "\x1b[90m",
+};
+
 async function loadIgnorePatterns(cwd: string): Promise<string[]> {
   const { existsSync, readFileSync } = await import("fs");
   const { join } = await import("path");
@@ -146,6 +155,49 @@ if (!command || command === "serve") {
   } catch {
     console.log(JSON.stringify({}));
   }
+  process.exit(0);
+} else if (command === "on-stop") {
+  const { existsSync, readFileSync, writeFileSync } = await import("fs");
+  const { resolve, join } = await import("path");
+
+  const cacheDir = resolve(process.env.CACHEBRO_DIR ?? ".cachebro");
+  const statsFile = join(cacheDir, "last-session.json");
+  const lastReportedFile = join(cacheDir, "last-reported.json");
+
+  if (!existsSync(statsFile)) process.exit(0);
+
+  try {
+    const data = JSON.parse(readFileSync(statsFile, "utf-8"));
+    const { metrics, branch } = data;
+    if (!metrics?.tools?.length) process.exit(0);
+
+    let lastReported = { totalSaved: 0, totalCalls: 0 };
+    if (existsSync(lastReportedFile)) {
+      try { lastReported = JSON.parse(readFileSync(lastReportedFile, "utf-8")); } catch {}
+    }
+
+    const deltaSaved = metrics.totalSaved - (lastReported.totalSaved || 0);
+    const totalCalls = metrics.tools.reduce((s: number, t: any) => s + t.calls, 0);
+    const deltaCalls = totalCalls - (lastReported.totalCalls || 0);
+
+    const savedStr = deltaSaved >= 1000 ? `~${(deltaSaved / 1000).toFixed(1)}k` : `~${deltaSaved}`;
+    const colorSaved = deltaSaved > 0 ? C.green : C.gray;
+
+    let line = ` ${C.cyan}${C.bold}cachebro${C.reset}  ${colorSaved}${savedStr} tokens saved${C.reset}`;
+    if (deltaCalls > 0) line += ` ${C.dim}· ${deltaCalls} calls${C.reset}`;
+    line += ` ${C.dim}· ${branch}${C.reset}`;
+
+    try {
+      const { openSync, writeSync, closeSync } = await import("fs");
+      const fd = openSync("/dev/tty", "w");
+      writeSync(fd, line + "\n");
+      closeSync(fd);
+    } catch {
+      process.stderr.write(line + "\n");
+    }
+
+    writeFileSync(lastReportedFile, JSON.stringify({ totalSaved: metrics.totalSaved, totalCalls }));
+  } catch {}
   process.exit(0);
 } else if (command === "prune") {
   const { createCache } = await import("@turso/cachebro");
@@ -397,10 +449,9 @@ sys.exit(0)
       const { execSync: _exec } = await import("child_process");
       cachebroBin = _exec("which cachebro", { encoding: "utf8" }).trim();
     } catch {}
-
     settings.hooks.Stop = settings.hooks.Stop ?? [];
-    if (!hasHook("Stop", "cachebro on-session-end")) {
-      settings.hooks.Stop.push({ hooks: [{ type: "command", command: `${cachebroBin} on-session-end`, timeout: 5 }] });
+    if (!hasHook("Stop", "cachebro on-stop") && !hasHook("Stop", "cachebro on-session-end")) {
+      settings.hooks.Stop.push({ hooks: [{ type: "command", command: `${cachebroBin} on-stop`, timeout: 5 }] });
     }
     settings.hooks.SessionEnd = settings.hooks.SessionEnd ?? [];
     if (!hasHook("SessionEnd", "cachebro on-session-end")) {
