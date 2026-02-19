@@ -155,6 +155,29 @@ console.assert(statsAfter.filesTracked >= 1, "Files should survive migration");
 await mCache2.close();
 rmSync(MIGRATION_DIR, { recursive: true, force: true });
 
+// Test 11: file_mtimes table exists after init
+console.log("\n--- Test 11: file_mtimes table exists ---");
+const MTIME_DIR = join(TEST_DIR, "mtime_test");
+mkdirSync(MTIME_DIR, { recursive: true });
+const mtimeDbPath = join(MTIME_DIR, "mtime.db");
+const mtimeFile = join(MTIME_DIR, "test.ts");
+writeFileSync(mtimeFile, "const x = 1;\n");
+
+const { cache: mtimeCache } = createCache({ dbPath: mtimeDbPath, sessionId: "mtime-1" });
+await mtimeCache.init();
+
+// Read a file to exercise the cache
+await mtimeCache.readFile(mtimeFile);
+
+// Second read should be cached
+const mtimeR2 = await mtimeCache.readFile(mtimeFile);
+console.log(`  second read cached: ${mtimeR2.cached}`);
+console.assert(mtimeR2.cached, "Second read should be cached");
+console.assert(mtimeR2.linesChanged === 0, "No changes expected");
+
+await mtimeCache.close();
+rmSync(MTIME_DIR, { recursive: true, force: true });
+
 // Cleanup
 watcher.close();
 await cache.close();

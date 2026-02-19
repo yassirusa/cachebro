@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS stats (
 );
 
 INSERT OR IGNORE INTO stats (key, value) VALUES ('tokens_saved', 0);
+
+CREATE TABLE IF NOT EXISTS file_mtimes (
+  path      TEXT PRIMARY KEY,
+  hash      TEXT NOT NULL,
+  mtime_ms  REAL NOT NULL
+);
 `;
 
 const SCHEMA_FTS = `
@@ -73,11 +79,12 @@ CREATE TABLE IF NOT EXISTS indexed_files (
 );
 `;
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 const SCHEMA_MIGRATIONS: Record<number, string[]> = {
-  // Future migrations go here, e.g.:
-  // 7: ["ALTER TABLE session_metrics ADD COLUMN last_reported_saved INTEGER DEFAULT 0"],
+  7: [
+    "CREATE TABLE IF NOT EXISTS file_mtimes (path TEXT PRIMARY KEY, hash TEXT NOT NULL, mtime_ms REAL NOT NULL)",
+  ],
 };
 
 function estimateTokens(text: string): number {
@@ -637,7 +644,7 @@ export class CacheStore {
 
   async clear(): Promise<void> {
     await this.init();
-    await this.withDb((db) => { db.exec("DELETE FROM file_versions; DELETE FROM session_reads; DELETE FROM session_stats; DELETE FROM session_metrics; DELETE FROM session_events; UPDATE stats SET value = 0;"); });
+    await this.withDb((db) => { db.exec("DELETE FROM file_versions; DELETE FROM session_reads; DELETE FROM session_stats; DELETE FROM session_metrics; DELETE FROM session_events; DELETE FROM file_mtimes; UPDATE stats SET value = 0;"); });
   }
 
   async prune(keepVersions: number = 5): Promise<number> {
