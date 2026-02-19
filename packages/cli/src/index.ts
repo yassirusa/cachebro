@@ -291,6 +291,50 @@ if (!command || command === "serve") {
 
   console.log("Indexing complete.");
   await cache.close();
+} else if (command === "warmup") {
+  const { createCache } = await import("@turso/cachebro");
+  const { resolve, join } = await import("path");
+  const { existsSync, mkdirSync } = await import("fs");
+  const os = await import("os");
+  const Database = (await import("better-sqlite3")).default;
+
+  const cwd = process.cwd();
+  const cacheDir = resolve(process.env.CACHEBRO_DIR ?? ".cachebro");
+  const dbPath = join(cacheDir, "cache.db");
+
+  if (!existsSync(cacheDir)) {
+    mkdirSync(cacheDir, { recursive: true });
+  }
+
+  const ignorePatterns = await loadIgnorePatterns(cwd);
+  const { cache } = createCache({ dbPath, sessionId: "cli-warmup", ignorePatterns });
+  await cache.init();
+
+  console.log("Scanning repository...");
+  const files = await cache.getAllFiles(cwd);
+  console.log(`Found ${files.length} files. Warming up content cache...`);
+
+  const sharedDb = new Database(dbPath);
+  sharedDb.pragma("busy_timeout = 5000");
+  sharedDb.pragma("journal_mode = WAL");
+
+  const result = await cache.warmupFiles(cwd, {
+    batchSize: 100,
+    db: sharedDb,
+    onProgress: (processed, total) => {
+      const percent = total > 0 ? Math.floor((processed / total) * 100) : 100;
+      const freeGB = (os.freemem() / (1024 * 1024 * 1024)).toFixed(1);
+      process.stderr.write(`\rProgress: [${percent}%] ${processed}/${total} | Free Mem: ${freeGB}GB   `);
+    },
+  });
+
+  sharedDb.close();
+  process.stderr.write("\n");
+
+  console.log(`Warmup complete. ${result.filesProcessed} files cached, ${result.errors} errors.`);
+  console.log("Content cache and FTS index are both populated.");
+  console.log("Subsequent readFile calls will use mtime checks to skip disk reads.");
+  await cache.close();
 } else if (command === "init") {
   const { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, chmodSync } =
     await import("fs");
@@ -545,6 +589,7 @@ Usage:
   cachebro init              Auto-configure cachebro for your editor
   cachebro uninit            Remove cachebro configuration
   cachebro index             Full repository indexing
+  cachebro warmup            Pre-cache all files (content + mtime + FTS index)
   cachebro serve             Start the MCP server (default)
   cachebro status            Show cache statistics
   cachebro prune [N]         Prune old file versions (keep N, default 5)
