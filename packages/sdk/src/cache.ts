@@ -362,10 +362,10 @@ export class CacheStore {
     const { readFileSync, statSync } = await import("fs");
     const { resolve, relative } = await import("path");
     const absPath = resolve(filePath);
-    statSync(absPath);
-    const currentContent = readFileSync(absPath, "utf-8");
-    const currentLines = currentContent.split("\n").length;
-    const currentHash = contentHash(currentContent);
+
+    const stat = statSync(absPath);
+    const currentMtime = stat.mtimeMs;
+
     const isPartial = (options?.offset ?? 0) > 0 || (options?.limit ?? 0) > 0;
     const sliceLines = (text: string): string => {
       if (!isPartial) return text;
@@ -374,12 +374,50 @@ export class CacheStore {
       const end = options?.limit ? start + options.limit : lines.length;
       return lines.slice(start, end).join("\n");
     };
+
     const relPath = relative(process.cwd(), absPath);
     if (this.isIgnored(relPath, false)) {
+       const currentContent = readFileSync(absPath, "utf-8");
+       const currentHash = contentHash(currentContent);
        const content = isPartial ? sliceLines(currentContent) : currentContent;
-       return this.withDb((db) => { this.addMetrics(db, toolName, estimateTokens(content), estimateTokens(content), branch); return { cached: false, content, hash: currentHash, totalLines: currentLines }; });
+       return this.withDb((db) => { this.addMetrics(db, toolName, estimateTokens(content), estimateTokens(content), branch); return { cached: false, content, hash: currentHash, totalLines: currentContent.split("\n").length }; });
     }
+
     return this.withDb(async (db) => {
+      // --- Mtime fast-path ---
+      let currentContent: string;
+      let currentHash: string;
+      let currentLines: number;
+
+      const mtimeRow = db.prepare(
+        "SELECT hash FROM file_mtimes WHERE path = ? AND mtime_ms = ?"
+      ).get(absPath, currentMtime) as { hash: string } | undefined;
+
+      if (mtimeRow) {
+        currentHash = mtimeRow.hash;
+        const cachedVersion = db.prepare(
+          "SELECT content, lines FROM file_versions WHERE path = ? AND hash = ?"
+        ).get(absPath, currentHash) as { content: string; lines: number } | undefined;
+
+        if (cachedVersion) {
+          currentContent = cachedVersion.content;
+          currentLines = cachedVersion.lines;
+        } else {
+          // Fallback: file_mtimes exists but file_versions doesn't
+          currentContent = readFileSync(absPath, "utf-8");
+          currentLines = currentContent.split("\n").length;
+          currentHash = contentHash(currentContent);
+          db.prepare("INSERT OR REPLACE INTO file_mtimes (path, hash, mtime_ms) VALUES (?, ?, ?)").run(absPath, currentHash, currentMtime);
+        }
+      } else {
+        // Mtime miss — read from disk
+        currentContent = readFileSync(absPath, "utf-8");
+        currentLines = currentContent.split("\n").length;
+        currentHash = contentHash(currentContent);
+        db.prepare("INSERT OR REPLACE INTO file_mtimes (path, hash, mtime_ms) VALUES (?, ?, ?)").run(absPath, currentHash, currentMtime);
+      }
+
+      // --- Session reads logic (UNCHANGED from current) ---
       const lastRead = db.prepare("SELECT hash FROM session_reads WHERE session_id = ? AND branch = ? AND path = ?").all(this.sessionId, branch, absPath) as any[];
       const originalContent = isPartial ? sliceLines(currentContent) : currentContent;
       const originalTokens = estimateTokens(originalContent);
@@ -431,7 +469,8 @@ export class CacheStore {
     const { readFileSync, statSync } = await import("fs");
     const { resolve, relative } = await import("path");
     const absPath = resolve(filePath);
-    statSync(absPath);
+    const stat = statSync(absPath);
+    const currentMtime = stat.mtimeMs;
     const currentContent = readFileSync(absPath, "utf-8");
     const currentHash = contentHash(currentContent);
     const originalTokens = estimateTokens(currentContent);
@@ -444,6 +483,7 @@ export class CacheStore {
       this.addMetrics(db, toolName, originalTokens, originalTokens, branch);
       await this.updateIndexInternal(absPath, currentContent, currentHash, db);
       db.prepare("INSERT OR IGNORE INTO file_versions (path, hash, content, lines, created_at) VALUES (?, ?, ?, ?, ?)").run(absPath, currentHash, currentContent, currentContent.split("\n").length, Date.now());
+      db.prepare("INSERT OR REPLACE INTO file_mtimes (path, hash, mtime_ms) VALUES (?, ?, ?)").run(absPath, currentHash, currentMtime);
       db.prepare("INSERT OR REPLACE INTO session_reads (session_id, branch, path, hash, read_at) VALUES (?, ?, ?, ?, ?)").run(this.sessionId, branch, absPath, currentHash, Date.now());
       return { cached: false, content: currentContent, hash: currentHash, totalLines: currentContent.split("\n").length };
     });
@@ -627,6 +667,7 @@ export class CacheStore {
       db.prepare("DELETE FROM session_reads WHERE path = ?").run(absPath);
       db.prepare("DELETE FROM file_content_fts WHERE path = ?").run(absPath);
       db.prepare("DELETE FROM indexed_files WHERE path = ?").run(absPath);
+      db.prepare("DELETE FROM file_mtimes WHERE path = ?").run(absPath);
       db.prepare("DELETE FROM file_versions WHERE path = ?").run(dirKey);
       db.prepare("DELETE FROM session_reads WHERE path = ?").run(dirKey);
     });

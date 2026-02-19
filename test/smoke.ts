@@ -178,6 +178,47 @@ console.assert(mtimeR2.linesChanged === 0, "No changes expected");
 await mtimeCache.close();
 rmSync(MTIME_DIR, { recursive: true, force: true });
 
+// Test 12: Mtime optimization — fresh session uses cached content
+console.log("\n--- Test 12: Mtime optimization (fresh session, cached via mtime) ---");
+const MTIME2_DIR = join(TEST_DIR, "mtime2_test");
+mkdirSync(MTIME2_DIR, { recursive: true });
+const mtime2DbPath = join(MTIME2_DIR, "mtime2.db");
+const mtime2File = join(MTIME2_DIR, "hello.ts");
+writeFileSync(mtime2File, "function greet() { return 'hello'; }\n");
+
+// Session A reads the file (populates file_versions + file_mtimes)
+const { cache: cacheA } = createCache({ dbPath: mtime2DbPath, sessionId: "mtime-sess-a" });
+await cacheA.init();
+const rA = await cacheA.readFile(mtime2File);
+console.log(`  Session A first read cached: ${rA.cached}`);
+console.assert(!rA.cached, "Session A first read should not be cached");
+await cacheA.close();
+
+// Session B reads the same file (should get full content from file_versions via mtime match)
+const { cache: cacheB } = createCache({ dbPath: mtime2DbPath, sessionId: "mtime-sess-b" });
+await cacheB.init();
+const rB = await cacheB.readFile(mtime2File);
+console.log(`  Session B first read cached: ${rB.cached}`);
+console.assert(!rB.cached, "Session B first read should not be cached (new session)");
+console.assert(rB.content.includes("greet"), "Should contain file content");
+
+// Session B reads again — should be cached (mtime unchanged, hash matches session_reads)
+const rB2 = await cacheB.readFile(mtime2File);
+console.log(`  Session B second read cached: ${rB2.cached}`);
+console.assert(rB2.cached, "Session B second read should be cached");
+console.assert(rB2.linesChanged === 0, "No changes expected");
+
+// Modify file and verify mtime change is detected
+writeFileSync(mtime2File, "function greet() { return 'hello world'; }\n");
+const rB3 = await cacheB.readFile(mtime2File);
+console.log(`  Session B after modify cached: ${rB3.cached}`);
+console.log(`  Session B after modify linesChanged: ${rB3.linesChanged}`);
+console.assert(rB3.cached, "Should be cached (returns diff)");
+console.assert((rB3.linesChanged ?? 0) > 0, "Should detect changes");
+
+await cacheB.close();
+rmSync(MTIME2_DIR, { recursive: true, force: true });
+
 // Cleanup
 watcher.close();
 await cache.close();
