@@ -1,8 +1,10 @@
 import { createCache } from "@turso/cachebro";
 import { writeFileSync, mkdirSync, rmSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 
-const TEST_DIR = join(import.meta.dir, ".tmp_test");
+const __dirname = (import.meta as any).dir ?? dirname(fileURLToPath(import.meta.url));
+const TEST_DIR = join(__dirname, ".tmp_test");
 const DB_PATH = join(TEST_DIR, "test.db");
 const FILE_PATH = join(TEST_DIR, "example.ts");
 
@@ -126,6 +128,32 @@ console.assert(!r9.cached, "Should NOT be cached — changes inside requested ra
 console.assert(r9.content.includes("MODIFIED_IN_RANGE"), "Should include modified content");
 
 await cache2.close();
+
+// Test 10: Non-destructive schema migration
+console.log("\n--- Test 10: Non-destructive schema migration ---");
+const MIGRATION_DIR = join(TEST_DIR, "migration_test");
+mkdirSync(MIGRATION_DIR, { recursive: true });
+const migrationDbPath = join(MIGRATION_DIR, "migrate.db");
+const migrationFile = join(MIGRATION_DIR, "test.ts");
+writeFileSync(migrationFile, "const x = 1;\n");
+
+// Create a session, read a file (populates file_versions)
+const { cache: mCache1 } = createCache({ dbPath: migrationDbPath, sessionId: "migrate-1" });
+await mCache1.init();
+await mCache1.readFile(migrationFile);
+const statsBefore = await mCache1.getStats();
+console.log(`  Files before migration: ${statsBefore.filesTracked}`);
+console.assert(statsBefore.filesTracked >= 1, "Should have at least 1 file tracked");
+await mCache1.close();
+
+// Re-init same DB with a different session (simulates upgrade — init() should preserve data)
+const { cache: mCache2 } = createCache({ dbPath: migrationDbPath, sessionId: "migrate-2" });
+await mCache2.init();
+const statsAfter = await mCache2.getStats();
+console.log(`  Files after migration: ${statsAfter.filesTracked}`);
+console.assert(statsAfter.filesTracked >= 1, "Files should survive migration");
+await mCache2.close();
+rmSync(MIGRATION_DIR, { recursive: true, force: true });
 
 // Cleanup
 watcher.close();

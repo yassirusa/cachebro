@@ -56,7 +56,7 @@ if (!command || command === "serve") {
 
   await cache.close();
 } else if (command === "on-session-end") {
-  const { existsSync, readFileSync, openSync, writeSync, closeSync } = await import("fs");
+  const { existsSync, readFileSync } = await import("fs");
   const { resolve, join } = await import("path");
 
   const cacheDir = resolve(process.env.CACHEBRO_DIR ?? ".cachebro");
@@ -88,7 +88,7 @@ if (!command || command === "serve") {
       out += `  ${C.bold}${C.green}Total: ${totalStr} tokens saved  (${metrics.percentSaved.toFixed(1)}%)${C.reset}\n`;
       out += `${bar}\n`;
     }
-    try { const fd = openSync("/dev/tty", "w"); writeSync(fd, out); closeSync(fd); } catch { process.stderr.write(out); }
+    process.stderr.write(out);
   } catch {}
   process.exit(0);
 } else if (command === "on-session-start") {
@@ -188,15 +188,7 @@ if (!command || command === "serve") {
     let line = ` ${C.cyan}${C.bold}cachebro${C.reset}  ${colorSaved}${savedStr} tokens saved${C.reset}`;
     if (deltaCalls > 0) line += ` ${C.dim}· ${deltaCalls} calls${C.reset}`;
     line += ` ${C.dim}· ${branch}${C.reset}`;
-
-    try {
-      const { openSync, writeSync, closeSync } = await import("fs");
-      const fd = openSync("/dev/tty", "w");
-      writeSync(fd, line + "\n");
-      closeSync(fd);
-    } catch {
-      process.stderr.write(line + "\n");
-    }
+    process.stderr.write(line + "\n");
 
     writeFileSync(lastReportedFile, JSON.stringify({ totalSaved: metrics.totalSaved, totalCalls }));
   } catch {}
@@ -390,7 +382,7 @@ try:
     data = json.load(sys.stdin)
     tool_name = data.get("tool_name", "")
     session_id = data.get("session_id", "unknown")
-    if tool_name not in ("Read", "Grep", "Glob"):
+    if tool_name not in ("Read", "Grep", "Glob", "Edit"):
         sys.exit(0)
     state_file = f"/tmp/.cachebro-state-{session_id}"
     if os.path.exists(state_file):
@@ -399,7 +391,7 @@ try:
         if state.get("last_status") == "error":
             if time.time() - state.get("last_time", 0) < 10:
                 sys.exit(0)
-    tool_map = {"Read": "mcp__cachebro__read_file", "Grep": "mcp__cachebro__grep or mcp__cachebro__search", "Glob": "mcp__cachebro__ls"}
+    tool_map = {"Read": "mcp__cachebro__read_file", "Grep": "mcp__cachebro__grep or mcp__cachebro__search", "Glob": "mcp__cachebro__ls", "Edit": "mcp__cachebro__edit_file"}
     print(json.dumps({"decision": "block", "reason": f"Use {tool_map.get(tool_name, 'a cachebro equivalent')} instead of {tool_name}. cachebro is faster and token-efficient. If cachebro returns an error, retry immediately — the block lifts for 10s after a cachebro failure."}))
     sys.exit(0)
 except Exception:
@@ -439,7 +431,7 @@ sys.exit(0)
 
     settings.hooks.PreToolUse = settings.hooks.PreToolUse ?? [];
     if (!hasHook("PreToolUse", "cachebro-guard")) {
-      settings.hooks.PreToolUse.push({ matcher: "Read|Grep|Glob", hooks: [{ type: "command", command: `python3 ${guardPath}`, timeout: 5 }] });
+      settings.hooks.PreToolUse.push({ matcher: "Read|Grep|Glob|Edit", hooks: [{ type: "command", command: `python3 ${guardPath}`, timeout: 5 }] });
     }
     settings.hooks.PostToolUse = settings.hooks.PostToolUse ?? [];
     if (!hasHook("PostToolUse", "cachebro-tracker")) {

@@ -22,6 +22,7 @@ If an edit introduces a regression and you can't easily fix it:
 ### File Operations
 - `read_file` — Read a file with caching (returns diff on re-read if changed, or unchanged marker)
 - `read_files` — Batch read multiple files with caching
+- `edit_file` — Edit a file with exact string replacement (replaces built-in Edit tool)
 - `ls` — List directory contents (cached)
 
 ### Search

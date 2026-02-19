@@ -15,7 +15,7 @@
   "scripts": {
     "build": "bun build packages/cli/src/index.ts --target node --external @modelcontextprotocol/sdk --external zod --external better-sqlite3 --outfile dist/cli.mjs && node -e \"let f=require('fs');let c=f.readFileSync('dist/cli.mjs','utf8');f.writeFileSync('dist/cli.mjs',c.replace('#!/usr/bin/env bun','#!/usr/bin/env node'))\"",
     "prepublishOnly": "bun run build",
-    "test": "bun test/smoke.ts"
+    "test": "npx tsx test/smoke.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

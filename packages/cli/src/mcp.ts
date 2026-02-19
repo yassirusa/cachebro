@@ -345,6 +345,77 @@ ALWAYS prefer this over multiple Read calls — it's faster and saves significan
     },
   );
 
+
+  server.tool(
+    "edit_file",
+    `Performs exact string replacements in files with caching. Use this INSTEAD of the built-in Edit tool.
+Reads the file, validates the replacement, writes the result, and updates the cache.
+The old_string must be unique in the file unless replace_all is true.`,
+    {
+      file_path: z.string().describe("The absolute path to the file to modify"),
+      old_string: z.string().describe("The text to replace"),
+      new_string: z.string().describe("The text to replace it with (must be different from old_string)"),
+      replace_all: z.boolean().optional().default(false).describe("Replace all occurrences of old_string (default false)"),
+    },
+    async ({ file_path, old_string, new_string, replace_all }) => {
+      isBusy = true;
+      try {
+        const { readFileSync, writeFileSync } = await import("fs");
+        const absPath = resolve(file_path);
+
+        if (old_string === new_string) {
+          return { content: [{ type: "text" as const, text: "Error: old_string and new_string are identical." }], isError: true };
+        }
+
+        let content: string;
+        try {
+          content = readFileSync(absPath, "utf-8");
+        } catch (e: any) {
+          return { content: [{ type: "text" as const, text: `Error: Cannot read file: ${e.message}` }], isError: true };
+        }
+
+        // Count occurrences
+        let count = 0;
+        let pos = 0;
+        while ((pos = content.indexOf(old_string, pos)) !== -1) {
+          count++;
+          pos += old_string.length;
+        }
+
+        if (count === 0) {
+          return { content: [{ type: "text" as const, text: "Error: old_string not found in file." }], isError: true };
+        }
+        if (!replace_all && count > 1) {
+          return { content: [{ type: "text" as const, text: `Error: old_string is not unique (found ${count} occurrences). Provide more context or set replace_all to true.` }], isError: true };
+        }
+
+        // Perform replacement
+        const newContent = replace_all
+          ? content.split(old_string).join(new_string)
+          : content.replace(old_string, new_string);
+
+        writeFileSync(absPath, newContent);
+
+        // Update cache with new content
+        try {
+          await cache.readFile(absPath, { toolName: "edit_file" });
+        } catch {}
+
+        const replacements = replace_all ? count : 1;
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Edit applied: ${replacements} replacement${replacements > 1 ? "s" : ""} in ${absPath}`,
+          }],
+        };
+      } catch (e: any) {
+        return { content: [{ type: "text" as const, text: `Error: ${e.message}` }], isError: true };
+      } finally {
+        isBusy = false;
+        await persistStats();
+      }
+    },
+  );
   server.tool(
     "revert_file",
     "Revert a file to a previous version from the cache. Use when an edit introduces a regression.",
