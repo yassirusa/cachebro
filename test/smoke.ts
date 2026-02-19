@@ -219,6 +219,41 @@ console.assert((rB3.linesChanged ?? 0) > 0, "Should detect changes");
 await cacheB.close();
 rmSync(MTIME2_DIR, { recursive: true, force: true });
 
+// Test 13: Warmup pre-populates file_versions and file_mtimes
+console.log("\n--- Test 13: Warmup command ---");
+const WARMUP_DIR = join(TEST_DIR, "warmup_test");
+mkdirSync(WARMUP_DIR, { recursive: true });
+const warmupDbPath = join(WARMUP_DIR, "warmup.db");
+
+// Create some files
+writeFileSync(join(WARMUP_DIR, "a.ts"), "const a = 1;\n");
+writeFileSync(join(WARMUP_DIR, "b.ts"), "const b = 2;\n");
+writeFileSync(join(WARMUP_DIR, "c.ts"), "const c = 3;\n");
+
+const { cache: warmupCache } = createCache({ dbPath: warmupDbPath, sessionId: "warmup-1" });
+await warmupCache.init();
+
+// Run warmup
+const warmupResult = await warmupCache.warmupFiles(WARMUP_DIR);
+console.log(`  Files warmed: ${warmupResult.filesProcessed}`);
+console.log(`  Errors: ${warmupResult.errors}`);
+console.assert(warmupResult.filesProcessed >= 3, "Should warm at least 3 files");
+console.assert(warmupResult.errors === 0, "Should have no errors");
+
+// Verify: stats should show files tracked
+const warmupStats = await warmupCache.getStats();
+console.log(`  Files tracked after warmup: ${warmupStats.filesTracked}`);
+console.assert(warmupStats.filesTracked >= 3, "Should track at least 3 files");
+
+// Verify: readFile should work correctly after warmup
+const warmupR1 = await warmupCache.readFile(join(WARMUP_DIR, "a.ts"));
+console.log(`  Read after warmup cached: ${warmupR1.cached}`);
+console.assert(!warmupR1.cached, "First session read should not be 'cached' (returns full content)");
+console.assert(warmupR1.content.includes("const a"), "Should contain file content");
+
+await warmupCache.close();
+rmSync(WARMUP_DIR, { recursive: true, force: true });
+
 // Cleanup
 watcher.close();
 await cache.close();

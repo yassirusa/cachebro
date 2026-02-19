@@ -580,6 +580,91 @@ export class CacheStore {
     if (db) await exec(db); else await this.withDb(exec);
   }
 
+  async warmupBatch(
+    items: { path: string; content: string; hash: string; mtimeMs: number }[],
+    db?: Database.Database
+  ): Promise<void> {
+    await this.init();
+    if (items.length === 0) return;
+    const exec = async (dbInstance: Database.Database) => {
+      const checkVersionStmt = dbInstance.prepare(
+        "SELECT hash FROM file_versions WHERE path = ? AND hash = ?"
+      );
+      const insVersionStmt = dbInstance.prepare(
+        "INSERT OR IGNORE INTO file_versions (path, hash, content, lines, created_at) VALUES (?, ?, ?, ?, ?)"
+      );
+      const insMtimeStmt = dbInstance.prepare(
+        "INSERT OR REPLACE INTO file_mtimes (path, hash, mtime_ms) VALUES (?, ?, ?)"
+      );
+      const { resolve } = await import("path");
+      const now = Date.now();
+      const transaction = dbInstance.transaction((batch) => {
+        for (const item of batch) {
+          const absPath = resolve(item.path);
+          const existing = checkVersionStmt.get(absPath, item.hash);
+          if (!existing) {
+            const lines = item.content.split("\n").length;
+            insVersionStmt.run(absPath, item.hash, item.content, lines, now);
+          }
+          insMtimeStmt.run(absPath, item.hash, item.mtimeMs);
+        }
+      });
+      transaction(items);
+    };
+    if (db) await exec(db); else await this.withDb(exec);
+  }
+
+  async warmupFiles(
+    dirPath: string,
+    options?: {
+      batchSize?: number;
+      onProgress?: (processed: number, total: number) => void;
+      db?: Database.Database;
+    }
+  ): Promise<{ filesProcessed: number; errors: number }> {
+    await this.init();
+    const { readFileSync, statSync } = await import("fs");
+    const { resolve } = await import("path");
+    const batchSize = options?.batchSize ?? 100;
+
+    const files = await this.getAllFiles(dirPath);
+    const total = files.length;
+    let processed = 0;
+    let errors = 0;
+
+    for (let i = 0; i < files.length; i += batchSize) {
+      const chunk = files.slice(i, i + batchSize);
+      const batchItems: { path: string; content: string; hash: string; mtimeMs: number }[] = [];
+
+      for (const file of chunk) {
+        try {
+          const absPath = resolve(file);
+          const stat = statSync(absPath);
+          const content = readFileSync(absPath, "utf-8");
+          const hash = contentHash(content);
+          batchItems.push({ path: file, content, hash, mtimeMs: stat.mtimeMs });
+        } catch {
+          errors++;
+        }
+      }
+
+      if (batchItems.length > 0) {
+        try {
+          await this.warmupBatch(batchItems, options?.db);
+          const ftsItems = batchItems.map(b => ({ path: b.path, content: b.content, hash: b.hash }));
+          await this.updateIndexBatch(ftsItems, options?.db);
+          processed += batchItems.length;
+        } catch {
+          errors += batchItems.length;
+        }
+      }
+
+      options?.onProgress?.(processed + errors, total);
+    }
+
+    return { filesProcessed: processed, errors };
+  }
+
   private async updateIndexInternal(path: string, content: string, hash: string, db: Database.Database): Promise<void> {
     if (!this.searchEnabled) return;
     const { resolve } = await import("path");
