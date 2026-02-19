@@ -170,10 +170,16 @@ export async function startMcpServer(): Promise<void> {
   });
 
   // Common handler for search/grep
-  const handleSearch = async ({ pattern, path, limit }: { pattern: string, path?: string, limit?: number }) => {
+  const handleSearch = async ({ pattern, path, include, exclude, case_sensitive, limit }: { pattern: string, path?: string, include?: string, exclude?: string, case_sensitive?: boolean, limit?: number }) => {
     isBusy = true;
     try {
-      const result = await cache.searchContent(pattern, limit ?? 20);
+      const result = await cache.searchContent(pattern, {
+        limit: limit ?? 20,
+        path,
+        include,
+        exclude,
+        caseSensitive: case_sensitive,
+      });
       if (result.matches.length === 0) return { content: [{ type: "text" as const, text: "No matches found." }] };
       let text = `[cachebro search results for "${pattern}"]\n\n`;
       for (const m of result.matches) text += `--- ${m.path} ---\n${m.context}\n\n`;

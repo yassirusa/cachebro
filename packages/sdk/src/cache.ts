@@ -432,13 +432,55 @@ export class CacheStore {
     });
   }
 
-  async searchContent(query: string, limit: number = 20): Promise<any> {
+  async searchContent(query: string, options?: {
+    limit?: number;
+    path?: string;
+    include?: string;
+    exclude?: string;
+    caseSensitive?: boolean;
+  }): Promise<any> {
     await this.init();
     if (!this.searchEnabled) throw new Error("Search is disabled (FTS5 not found).");
+    const limit = options?.limit ?? 20;
+    const fetchLimit = limit * 3;
+
+    const { resolve, relative } = await import("path");
+    const absPrefix = options?.path && options.path !== "." ? resolve(options.path) : null;
+    const cwd = process.cwd();
+
+    const includeIg = options?.include ? ignore().add(options.include) : null;
+    const excludeIg = options?.exclude ? ignore().add(options.exclude) : null;
+
     return this.withDb((db) => {
-      // Use both symbols and content for weighted search
-      const rows = db.prepare("SELECT path, snippet(file_content_fts, 2, '[MATCH]', '[/MATCH]', '...', 10) as context FROM file_content_fts WHERE file_content_fts MATCH ? ORDER BY rank LIMIT ?").all(query, limit) as any[];
-      return { matches: rows.map(r => ({ path: r.path, context: r.context })), query };
+      const rows = db.prepare(
+        "SELECT path, snippet(file_content_fts, 2, '[MATCH]', '[/MATCH]', '...', 10) as context FROM file_content_fts WHERE file_content_fts MATCH ? ORDER BY rank LIMIT ?"
+      ).all(query, fetchLimit) as any[];
+
+      let filtered = rows;
+
+      if (absPrefix) {
+        filtered = filtered.filter(r => r.path.startsWith(absPrefix));
+      }
+      if (includeIg) {
+        filtered = filtered.filter(r => {
+          const rel = relative(cwd, r.path);
+          return includeIg.ignores(rel);
+        });
+      }
+      if (excludeIg) {
+        filtered = filtered.filter(r => {
+          const rel = relative(cwd, r.path);
+          return !excludeIg.ignores(rel);
+        });
+      }
+      if (options?.caseSensitive) {
+        filtered = filtered.filter(r => r.context.includes(query));
+      }
+
+      return {
+        matches: filtered.slice(0, limit).map(r => ({ path: r.path, context: r.context })),
+        query,
+      };
     });
   }
 
