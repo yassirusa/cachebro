@@ -166,7 +166,7 @@ export async function startMcpServer(): Promise<void> {
 
   const server = new McpServer({
     name: "cachebro",
-    version: "0.2.1",
+    version: "0.3.0",
   });
 
   // Common handler for search/grep

@@ -1,6 +1,6 @@
 {
   "name": "cachebro",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "mcpName": "io.github.glommer/cachebro",
   "description": "File cache with diff tracking for AI coding agents. Drop-in replacement for file reads that saves ~26% tokens.",
   "type": "module",
@@ -13,13 +13,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build packages/cli/src/index.ts --target node --external @tursodatabase/database --external @modelcontextprotocol/sdk --external zod --external better-sqlite3 --outfile dist/cli.mjs && node -e \"let f=require('fs');let c=f.readFileSync('dist/cli.mjs','utf8');f.writeFileSync('dist/cli.mjs',c.replace('#!/usr/bin/env bun','#!/usr/bin/env node'))\"",
+    "build": "bun build packages/cli/src/index.ts --target node --external @modelcontextprotocol/sdk --external zod --external better-sqlite3 --outfile dist/cli.mjs && node -e \"let f=require('fs');let c=f.readFileSync('dist/cli.mjs','utf8');f.writeFileSync('dist/cli.mjs',c.replace('#!/usr/bin/env bun','#!/usr/bin/env node'))\"",
     "prepublishOnly": "bun run build",
     "test": "bun test/smoke.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@tursodatabase/database": "^0.4.4",
     "better-sqlite3": "^11.8.1",
     "zod": "^3.24.0"
   },
