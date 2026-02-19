@@ -302,7 +302,8 @@ export class CacheStore {
       if (lastRead.length > 0) {
         const lastHash = lastRead[0].hash as string;
         if (lastHash === currentHash) {
-          const label = `[cachebro: unchanged, ${files.length} items]`;
+          const savedLabel = originalTokens >= 1000 ? `~${(originalTokens / 1000).toFixed(1)}k` : `~${originalTokens}`;
+          const label = `[unchanged · ${files.length} items · ${savedLabel} saved]`;
           this.addMetrics(db, toolName, originalTokens, estimateTokens(label), branch);
           this.logEvent(db, "read", dbKey, currentHash, branch);
           db.prepare("UPDATE session_reads SET read_at = ? WHERE session_id = ? AND branch = ? AND path = ?").run(Date.now(), this.sessionId, branch, dbKey);
@@ -379,7 +380,10 @@ export class CacheStore {
         const lastHash = lastRead[0].hash as string;
         if (lastHash === currentHash) {
           this.logEvent(db, "read", absPath, currentHash, branch);
-          const label = isPartial ? `[cachebro: unchanged on branch ${branch}, lines ${(options?.offset ?? 1)}-${(options?.limit ? (options.offset ?? 1) + options.limit - 1 : currentLines)} of ${currentLines}, ${originalTokens} tokens saved]` : `[cachebro: unchanged on branch ${branch}, ${currentLines} lines, ${originalTokens} tokens saved]`;
+          const savedLabel = originalTokens >= 1000 ? `~${(originalTokens / 1000).toFixed(1)}k` : `~${originalTokens}`;
+          const label = isPartial
+            ? `[unchanged · lines ${(options?.offset ?? 1)}-${(options?.limit ? (options.offset ?? 1) + options.limit - 1 : currentLines)} of ${currentLines} · ${savedLabel} saved]`
+            : `[unchanged · ${currentLines} lines · ${savedLabel} saved]`;
           this.addMetrics(db, toolName, originalTokens, estimateTokens(label), branch);
           db.prepare("UPDATE session_reads SET read_at = ? WHERE session_id = ? AND branch = ? AND path = ?").run(Date.now(), this.sessionId, branch, absPath);
           return { cached: true, content: label, hash: currentHash, totalLines: currentLines, linesChanged: 0 };
@@ -393,9 +397,15 @@ export class CacheStore {
           const oldContent = oldVersion[0].content as string;
           const diffResult = computeDiff(oldContent, currentContent, filePath);
           if (diffResult.hasChanges) {
-            const actualContent = isPartial ? sliceLines(currentContent) : diffResult.diff;
+            let diffOutput = diffResult.diff;
+            const diffLines = diffOutput.split("\n");
+            const MAX_DIFF_LINES = 200;
+            if (diffLines.length > MAX_DIFF_LINES) {
+              diffOutput = diffLines.slice(0, MAX_DIFF_LINES).join("\n") + `\n[... diff truncated at ${MAX_DIFF_LINES} lines. File has ${diffResult.linesChanged} total changes.]`;
+            }
+            const actualContent = isPartial ? sliceLines(currentContent) : diffOutput;
             this.addMetrics(db, toolName, originalTokens, estimateTokens(actualContent), branch);
-            return { cached: true, content: actualContent, diff: diffResult.diff, hash: currentHash, linesChanged: diffResult.linesChanged, totalLines: currentLines };
+            return { cached: true, content: actualContent, diff: diffOutput, hash: currentHash, linesChanged: diffResult.linesChanged, totalLines: currentLines };
           }
         }
       }
