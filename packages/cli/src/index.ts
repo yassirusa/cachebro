@@ -71,19 +71,21 @@ if (!command || command === "serve") {
     const hasMetrics = metrics?.tools?.length > 0;
     if (!hasMetrics) process.exit(0);
 
-    const bar = "─".repeat(46);
+    const bar = `${C.dim}${"─".repeat(50)}${C.reset}`;
     let out = `\n${bar}\n`;
-    out += ` cachebro  ·  branch: ${branch}\n`;
+    out += ` ${C.cyan}${C.bold}cachebro${C.reset}  ${C.dim}·  session complete  ·  ${branch}${C.reset}\n`;
     out += `${bar}\n`;
     for (const t of (metrics?.tools ?? [])) {
-      const label = t.tool.padEnd(18);
+      const label = t.tool.padEnd(20);
       const calls = `${t.calls}x`.padStart(4);
-      const saved = `~${t.tokensSaved.toLocaleString()} tokens`.padStart(18);
-      out += `  ${label}  ${calls}  →  ${saved} saved\n`;
+      const savedNum = t.tokensSaved >= 1000 ? `~${(t.tokensSaved / 1000).toFixed(1)}k` : `~${t.tokensSaved}`;
+      const saved = `${savedNum} tokens saved`.padStart(24);
+      out += `  ${label}${calls}  →  ${C.green}${saved}${C.reset}\n`;
     }
     out += `${bar}\n`;
     if (hasMetrics) {
-      out += `  Total: ~${metrics.totalSaved.toLocaleString()} tokens saved  (${metrics.percentSaved.toFixed(1)}%)\n`;
+      const totalStr = metrics.totalSaved >= 1000 ? `~${(metrics.totalSaved / 1000).toFixed(1)}k` : `~${metrics.totalSaved}`;
+      out += `  ${C.bold}${C.green}Total: ${totalStr} tokens saved  (${metrics.percentSaved.toFixed(1)}%)${C.reset}\n`;
       out += `${bar}\n`;
     }
     try { const fd = openSync("/dev/tty", "w"); writeSync(fd, out); closeSync(fd); } catch { process.stderr.write(out); }
