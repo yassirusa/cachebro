@@ -38,6 +38,13 @@ If an edit introduces a regression and you can't easily fix it:
 - `get_working_set` — List files touched in session with edit counts
 - `search_history` — View chronological read/write history
 
+## CLI Commands
+- `cachebro init` — Auto-configure cachebro for your editor
+- `cachebro index` — Full repository FTS indexing for search
+- `cachebro warmup` — Pre-cache all files (content + mtime + FTS index). Run before starting a session for maximum token savings.
+- `cachebro status` — Show cache statistics
+- `cachebro prune [N]` — Prune old file versions (keep N, default 5)
+
 ## MCP Resources
 - `cachebro://status` — Session stats (files tracked, tokens saved)
 - `cachebro://working-set` — Current working set with edit counts
