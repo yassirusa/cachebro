@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS indexed_files (
 
 const CURRENT_SCHEMA_VERSION = 6;
 
+const SCHEMA_MIGRATIONS: Record<number, string[]> = {
+  // Future migrations go here, e.g.:
+  // 7: ["ALTER TABLE session_metrics ADD COLUMN last_reported_saved INTEGER DEFAULT 0"],
+};
+
 function estimateTokens(text: string): number {
   return Math.ceil(text.length * 0.75);
 }
@@ -172,13 +177,29 @@ export class CacheStore {
       } catch (e) {}
       
       const version = db.pragma("user_version", { simple: true }) as number;
-      
-      if (version < CURRENT_SCHEMA_VERSION) {
-        const tables = ["file_versions", "session_reads", "session_events", "session_metrics", "stats", "session_stats", "file_content_fts", "indexed_files"];
-        for (const table of tables) db.exec(`DROP TABLE IF EXISTS ${table}`);
+
+      if (version === 0) {
+        // Fresh database — create all tables
         db.exec(SCHEMA);
         db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
+      } else if (version < CURRENT_SCHEMA_VERSION) {
+        // Existing database — ensure base tables exist (CREATE IF NOT EXISTS is safe)
+        db.exec(SCHEMA);
+        // Run any version-specific migrations
+        for (let v = version + 1; v <= CURRENT_SCHEMA_VERSION; v++) {
+          const migrations = SCHEMA_MIGRATIONS[v];
+          if (migrations) {
+            for (const sql of migrations) {
+              try { db.exec(sql); } catch (e: any) {
+                // Ignore "duplicate column" errors from re-running migrations
+                if (!e.message?.includes("duplicate column")) throw e;
+              }
+            }
+          }
+        }
+        db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
       } else {
+        // Same version — just ensure tables exist
         db.exec(SCHEMA);
       }
 
