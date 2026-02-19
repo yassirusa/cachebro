@@ -144,6 +144,7 @@ export async function startMcpServer(): Promise<void> {
     dbPath,
     sessionId,
     ignorePatterns,
+    watchPaths: [cwd],
   });
 
   await cache.init();
