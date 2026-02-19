@@ -70,26 +70,58 @@ Or configure manually — add to your MCP config (`.claude.json`, `.cursor/mcp.j
 
 ### As an MCP server (recommended)
 
-The MCP server exposes 4 tools:
+The MCP server exposes a comprehensive suite of tools for efficient agentic workflows:
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read a file with caching. Returns full content on first read, "unchanged" or diff on subsequent reads. Supports `offset`/`limit` for partial reads. |
+| `read_file` | Read a file with caching. Returns full content on first read, "unchanged" or diff on subsequent reads. |
 | `read_files` | Batch read multiple files with caching. |
-| `cache_status` | Show stats: files tracked, tokens saved. |
-| `cache_clear` | Reset the cache. |
+| `list_directory` | List files in a directory with caching. Returns full tree on first call, "unchanged" or tree-diff (added/removed files) on subsequent calls. |
+| `revert_file` | Restore a file to a previous version stored in cachebro's history. |
+| `get_working_set` | Show files active in the current session (modified or frequently read). |
+| `search_history` | Search the session's chronological read/write history. |
+| `session_summary` | Get a "HUD" view of the current session: working set and recent activity. |
+| `summarize_session`| Generate a portable digest of session progress, metrics, and state for context compaction. |
+| `cache_status` | Show global stats: files tracked, total tokens saved. |
+| `cache_clear` | Reset the cache database. |
 
-Agents discover these tools automatically and prefer them over built-in file reads because the tool descriptions advertise token savings.
+Agents discover these tools automatically and prefer them because they proactively advertise token savings.
 
 ### As a CLI
 
 ```bash
 cachebro serve      # Start the MCP server
 cachebro status     # Show cache statistics
+cachebro prune [N]  # Remove old file versions (keep N, default 5)
+cachebro init       # Auto-configure Claude, Gemini, Codex, Cursor, etc.
 cachebro help       # Show help
 ```
 
 Set `CACHEBRO_DIR` to control where the cache database is stored (default: `.cachebro/` in the current directory).
+
+## New Features & Improvements
+
+- **Multi-Agent Support:** Powered by SQLite WAL mode and connection retries. Multiple agents (Claude, Gemini, Codex) can share the same cache database concurrently.
+- **Smart Compaction:** Use `summarize_session` before context clearing to generate a portable state artifact. Re-hydrate your "active memory" in a new session using `session_summary`.
+- **Advanced Diffing:** Uses Myers' Diff Algorithm (`fast-myers-diff`) for high-performance, memory-efficient diffing of even very large files.
+- **Ignore Support:** Respects `.gitignore` and `.cachebroignore` patterns to skip build artifacts and irrelevant noise.
+- **Session Metrics:** Automatically prints a summary table of token savings per tool when the session ends or the agent exits.
+
+### Session Metrics Example
+```
+### cachebro Session Metrics
+
+| Tool | Times called | Total tokens saved |
+| :--- | :---: | :--- |
+| read_file | 12 | 45,230 |
+| list_directory | 4 | 8,120 |
+
+**Totals:**
+- Tokens if no cachebro: 124,500
+- Actual tokens used:    71,150
+- Total tokens saved:    53,350
+- Percent saved:         42.8%
+```
 
 ### As an SDK
 
@@ -149,6 +181,18 @@ packages/
 **Change detection:** On every read, cachebro hashes the current file content and compares it to the cached hash. Same hash = unchanged. Different hash = compute diff, update cache. No polling, no watchers required for correctness — the hash is the source of truth.
 
 **Token estimation:** `ceil(characters * 0.75)`. Rough but directionally correct for code. Good enough for the "tokens saved" metric.
+
+## Troubleshooting
+
+### "no such module: fts5"
+If you see an error about `fts5` missing, your system SQLite was compiled without Full Text Search support.
+
+**To fix:**
+- **Ubuntu/Debian:** `sudo apt-get install sqlite3 libsqlite3-0`
+- **macOS:** `brew install sqlite`
+- **Windows:** FTS5 is usually included in standard SQLite binaries.
+
+`cachebro` will continue to work without search if FTS5 is missing, but advanced search will be disabled.
 
 ## License
 

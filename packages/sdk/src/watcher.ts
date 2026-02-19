@@ -1,11 +1,10 @@
-import { watch, type FSWatcher } from "fs";
+import { watch, type FSWatcher } from "chokidar";
 import { resolve } from "path";
 import type { CacheStore } from "./cache.js";
 
 export class FileWatcher {
-  private watchers: FSWatcher[] = [];
+  private watcher: FSWatcher | null = null;
   private cache: CacheStore;
-  private debounceTimers = new Map<string, Timer>();
   private debounceMs: number;
 
   constructor(cache: CacheStore, debounceMs = 100) {
@@ -13,44 +12,40 @@ export class FileWatcher {
     this.debounceMs = debounceMs;
   }
 
-  watch(paths: string[]): void {
-    for (const p of paths) {
-      const absPath = resolve(p);
-      const watcher = watch(absPath, { recursive: true }, (event, filename) => {
-        if (!filename) return;
-        const filePath = resolve(absPath, filename);
-
-        // Skip hidden files, node_modules, .git
-        if (filename.startsWith(".") || filename.includes("node_modules") || filename.includes(".git")) {
-          return;
-        }
-
-        // Debounce rapid changes to the same file
-        const existing = this.debounceTimers.get(filePath);
-        if (existing) clearTimeout(existing);
-
-        this.debounceTimers.set(
-          filePath,
-          setTimeout(() => {
-            this.debounceTimers.delete(filePath);
-            this.handleChange(event, filePath);
-          }, this.debounceMs),
-        );
-      });
-
-      this.watchers.push(watcher);
+  watch(paths: string[], ignorePatterns: string[] = []): void {
+    if (this.watcher) {
+      this.watcher.add(paths);
+      // Note: chokidar doesn't support updating ignored patterns dynamically easily
+      // so new ignore patterns won't apply to existing watcher instance
+      return;
     }
+
+    this.watcher = watch(paths, {
+      ignored: [
+        /(^|[\/\\])\../, // ignore dotfiles
+        /node_modules/,
+        ...ignorePatterns
+      ],
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: this.debounceMs,
+        pollInterval: 100
+      }
+    });
+
+    this.watcher
+      .on("add", (path) => this.handleChange("rename", path))
+      .on("change", (path) => this.handleChange("change", path))
+      .on("unlink", (path) => this.handleChange("rename", path))
+      .on("unlinkDir", (path) => this.handleChange("rename", path));
   }
 
-  close(): void {
-    for (const w of this.watchers) {
-      w.close();
+  async close(): Promise<void> {
+    if (this.watcher) {
+      await this.watcher.close();
+      this.watcher = null;
     }
-    this.watchers = [];
-    for (const timer of this.debounceTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.debounceTimers.clear();
   }
 
   private async handleChange(event: string, filePath: string): Promise<void> {

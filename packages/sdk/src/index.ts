@@ -15,7 +15,7 @@ export function createCache(config: CacheConfig): { cache: CacheStore; watcher: 
   const watcher = new FileWatcher(cache);
 
   if (config.watchPaths && config.watchPaths.length > 0) {
-    watcher.watch(config.watchPaths);
+    watcher.watch(config.watchPaths, config.ignorePatterns);
   }
 
   return { cache, watcher };

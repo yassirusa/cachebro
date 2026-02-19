@@ -1,5 +1,7 @@
+import { diff } from "fast-myers-diff";
+
 /**
- * Minimal unified diff implementation.
+ * Minimal unified diff implementation using fast-myers-diff.
  * Computes a line-based diff between two strings and returns a compact representation.
  */
 
@@ -18,42 +20,65 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
 
-  // LCS-based diff
-  const lcs = longestCommonSubsequence(oldLines, newLines);
+  const changes = diff(oldLines, newLines);
 
-  const hunks: string[] = [];
-  let oldIdx = 0;
-  let newIdx = 0;
-  let lcsIdx = 0;
-  let linesChanged = 0;
-
-  // Collect raw diff lines
   const rawLines: Array<{ type: "keep" | "add" | "remove"; line: string; oldLine: number; newLine: number }> = [];
+  let oldPos = 0;
+  let newPos = 0;
+  let linesChanged = 0;
+  const changedNewLines = new Set<number>();
 
-  while (oldIdx < oldLines.length || newIdx < newLines.length) {
-    if (lcsIdx < lcs.length && oldIdx < oldLines.length && oldLines[oldIdx] === lcs[lcsIdx] &&
-        newIdx < newLines.length && newLines[newIdx] === lcs[lcsIdx]) {
-      rawLines.push({ type: "keep", line: oldLines[oldIdx], oldLine: oldIdx + 1, newLine: newIdx + 1 });
-      oldIdx++;
-      newIdx++;
-      lcsIdx++;
-    } else if (newIdx < newLines.length && (lcsIdx >= lcs.length || newLines[newIdx] !== lcs[lcsIdx])) {
-      rawLines.push({ type: "add", line: newLines[newIdx], oldLine: oldIdx + 1, newLine: newIdx + 1 });
-      newIdx++;
-      linesChanged++;
-    } else if (oldIdx < oldLines.length && (lcsIdx >= lcs.length || oldLines[oldIdx] !== lcs[lcsIdx])) {
-      rawLines.push({ type: "remove", line: oldLines[oldIdx], oldLine: oldIdx + 1, newLine: newIdx + 1 });
-      oldIdx++;
+  for (const [sx, ex, sy, ey] of changes) {
+    // Unchanged lines before this change
+    while (oldPos < sx) {
+      rawLines.push({
+        type: "keep",
+        line: oldLines[oldPos],
+        oldLine: oldPos + 1,
+        newLine: newPos + 1,
+      });
+      oldPos++;
+      newPos++;
+    }
+
+    // Removed lines
+    for (let i = sx; i < ex; i++) {
+      rawLines.push({
+        type: "remove",
+        line: oldLines[i],
+        oldLine: i + 1,
+        newLine: newPos + 1, // Points to next available line in new file
+      });
+      // For removals, mark the adjacent new line as potentially affecting context
+      changedNewLines.add(newPos + 1);
       linesChanged++;
     }
+    oldPos = ex;
+
+    // Added lines
+    for (let i = sy; i < ey; i++) {
+      rawLines.push({
+        type: "add",
+        line: newLines[i],
+        oldLine: oldPos + 1, // Points to next available line in old file
+        newLine: i + 1,
+      });
+      changedNewLines.add(i + 1);
+      linesChanged++;
+    }
+    newPos = ey;
   }
 
-  // Collect which lines in the new file were changed
-  const changedNewLines = new Set<number>();
-  for (const rl of rawLines) {
-    if (rl.type === "add") changedNewLines.add(rl.newLine);
-    // For removals, mark the adjacent new line as affected
-    if (rl.type === "remove") changedNewLines.add(rl.newLine);
+  // Remaining unchanged lines
+  while (oldPos < oldLines.length) {
+    rawLines.push({
+      type: "keep",
+      line: oldLines[oldPos],
+      oldLine: oldPos + 1,
+      newLine: newPos + 1,
+    });
+    oldPos++;
+    newPos++;
   }
 
   if (linesChanged === 0) {
@@ -62,6 +87,7 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
 
   // Group into hunks with 3 lines of context
   const CONTEXT = 3;
+  const hunks: string[] = [];
   const hunkGroups: typeof rawLines[] = [];
   let currentHunk: typeof rawLines = [];
   let lastChangeIdx = -999;
@@ -105,7 +131,21 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
     if (hunk.length === 0) continue;
     const firstLine = hunk[0];
     const lastLine = hunk[hunk.length - 1];
-    hunks.push(`@@ -${firstLine.oldLine},${lastLine.oldLine - firstLine.oldLine + 1} +${firstLine.newLine},${lastLine.newLine - firstLine.newLine + 1} @@`);
+    
+    // Calculate hunk header ranges
+    // Old range: start line and count
+    const oldStart = firstLine.oldLine;
+    let oldCount = 0;
+    let newCount = 0;
+    
+    for (const line of hunk) {
+      if (line.type !== "add") oldCount++;
+      if (line.type !== "remove") newCount++;
+    }
+    
+    const newStart = firstLine.newLine;
+
+    hunks.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`);
     for (const line of hunk) {
       const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " ";
       hunks.push(`${prefix}${line.line}`);
@@ -121,37 +161,3 @@ export function computeDiff(oldContent: string, newContent: string, filePath: st
   };
 }
 
-function longestCommonSubsequence(a: string[], b: string[]): string[] {
-  const m = a.length;
-  const n = b.length;
-
-  // Optimize for large files: use Map-based approach for sparse LCS
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-
-  // Backtrack to find the LCS
-  const result: string[] = [];
-  let i = m, j = n;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      result.unshift(a[i - 1]);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-
-  return result;
-}
