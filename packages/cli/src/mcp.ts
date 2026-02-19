@@ -437,6 +437,45 @@ ALWAYS prefer this over multiple Read calls — it's faster and saves significan
     },
   );
 
+  // MCP Resources
+  server.resource(
+    "session-status",
+    "cachebro://status",
+    async (uri) => ({
+      contents: [{
+        uri: uri.href,
+        text: await (async () => {
+          const stats = await cache.getStats();
+          const branch = getCurrentBranch();
+          return `cachebro status (${branch}):\n  Files tracked: ${stats.filesTracked}\n  Session tokens saved: ~${stats.sessionTokensSaved.toLocaleString()}\n  Total tokens saved: ~${stats.tokensSaved.toLocaleString()}`;
+        })(),
+        mimeType: "text/plain",
+      }],
+    }),
+  );
+
+  server.resource(
+    "working-set",
+    "cachebro://working-set",
+    async (uri) => {
+      const files = await cache.getWorkingSet();
+      let text = `Working set (${files.length} files):\n`;
+      for (const f of files) {
+        text += `  ${f.status === "modified" ? "M" : "R"}  ${f.path}${f.edits > 0 ? ` (${f.edits} edits)` : ""}\n`;
+      }
+      return { contents: [{ uri: uri.href, text, mimeType: "text/plain" }] };
+    },
+  );
+
+  server.resource(
+    "session-metrics",
+    "cachebro://metrics",
+    async (uri) => {
+      const metrics = await cache.getSessionMetrics();
+      return { contents: [{ uri: uri.href, text: formatSessionMetrics(metrics), mimeType: "text/plain" }] };
+    },
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
