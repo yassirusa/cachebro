@@ -80,6 +80,73 @@ if (!command || command === "serve") {
     try { const fd = openSync("/dev/tty", "w"); writeSync(fd, out); closeSync(fd); } catch { process.stderr.write(out); }
   } catch {}
   process.exit(0);
+} else if (command === "on-session-start") {
+  const { existsSync, readFileSync } = await import("fs");
+  const { join, resolve } = await import("path");
+
+  let input: any = {};
+  try {
+    const data = await new Promise<string>((res) => {
+      let d = "";
+      process.stdin.on("data", (c: Buffer) => d += c.toString());
+      process.stdin.on("end", () => res(d));
+      setTimeout(() => res(d), 3000);
+    });
+    if (data.trim()) input = JSON.parse(data);
+  } catch {}
+
+  const cwd = input.cwd || process.cwd();
+  const cacheDir = resolve(cwd, process.env.CACHEBRO_DIR ?? ".cachebro");
+  const statsFile = join(cacheDir, "last-session.json");
+
+  if (!existsSync(statsFile)) {
+    console.log(JSON.stringify({}));
+    process.exit(0);
+  }
+
+  try {
+    const data = JSON.parse(readFileSync(statsFile, "utf-8"));
+    const { metrics, branch, sessionId: prevSessionId } = data;
+
+    if (!metrics?.tools?.length) {
+      console.log(JSON.stringify({}));
+      process.exit(0);
+    }
+
+    let context = `## cachebro session state\nBranch: ${branch}\n\n`;
+
+    try {
+      const { createCache } = await import("@turso/cachebro");
+      const dbPath = join(cacheDir, "cache.db");
+      if (existsSync(dbPath)) {
+        const { cache } = createCache({ dbPath, sessionId: prevSessionId || "recovery" });
+        await cache.init();
+        const workingSet = await cache.getWorkingSet();
+        const modified = workingSet.filter((f: any) => f.status === "modified");
+        if (modified.length > 0) {
+          context += `### Working set (${modified.length} files modified)\n`;
+          for (const f of modified) context += `- ${f.path} (${f.edits} edits)\n`;
+          context += "\n";
+        }
+        const readOnly = workingSet.filter((f: any) => f.status === "read");
+        if (readOnly.length > 0 && readOnly.length <= 10) {
+          context += `### Recently read (${readOnly.length} files)\n`;
+          for (const f of readOnly.slice(0, 10)) context += `- ${f.path}\n`;
+          context += "\n";
+        }
+        await cache.close();
+      }
+    } catch {}
+
+    context += `### Session metrics\n`;
+    context += `~${metrics.totalSaved.toLocaleString()} tokens saved (${metrics.percentSaved.toFixed(1)}%)\n\n`;
+    context += `All files are cached. Re-reads will return diffs or unchanged markers.`;
+
+    console.log(JSON.stringify({ additionalContext: context }));
+  } catch {
+    console.log(JSON.stringify({}));
+  }
+  process.exit(0);
 } else if (command === "prune") {
   const { createCache } = await import("@turso/cachebro");
   const { resolve, join } = await import("path");
@@ -339,6 +406,10 @@ sys.exit(0)
     if (!hasHook("SessionEnd", "cachebro on-session-end")) {
       settings.hooks.SessionEnd.push({ hooks: [{ type: "command", command: `sleep 0.5 && ${cachebroBin} on-session-end`, timeout: 10 }] });
     }
+    settings.hooks.SessionStart = settings.hooks.SessionStart ?? [];
+    if (!hasHook("SessionStart", "cachebro on-session-start")) {
+      settings.hooks.SessionStart.push({ hooks: [{ type: "command", command: `${cachebroBin} on-session-start`, timeout: 10 }] });
+    }
 
     writeFileSync(claudeSettingsPath, JSON.stringify(settings, null, 2) + "\n");
     console.log(`  Claude Code hooks: configured`);
@@ -398,7 +469,7 @@ sys.exit(0)
     let settings: any = {};
     try { settings = JSON.parse(readFileSync(claudeSettingsPath, "utf-8")); } catch {}
     let modified = false;
-    for (const key of ["PreToolUse", "PostToolUse", "Stop", "SessionEnd"]) {
+    for (const key of ["PreToolUse", "PostToolUse", "Stop", "SessionEnd", "SessionStart"]) {
       if (Array.isArray(settings.hooks?.[key])) {
         const before = settings.hooks[key].length;
         settings.hooks[key] = settings.hooks[key].filter((e: any) =>
