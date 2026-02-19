@@ -89,6 +89,7 @@ if (!command || command === "serve") {
       out += `${bar}\n`;
     }
     process.stderr.write(out);
+    process.exit(2); // Exit 2 tells Claude Code to show stderr to user
   } catch {}
   process.exit(0);
 } else if (command === "on-session-start") {
