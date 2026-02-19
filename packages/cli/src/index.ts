@@ -549,14 +549,16 @@ sys.exit(0)
   console.log(`cachebro - Agent file cache with diff tracking
 
 Usage:
-  cachebro init      Auto-configure cachebro for your editor
-  cachebro uninit    Remove cachebro configuration from your editor
-  cachebro index     Manually trigger full repository indexing
-  cachebro serve     Start the MCP server (default)
-  cachebro status          Show cache statistics
-  cachebro prune [N]       Prune old file versions (keep N, default 5)
-  cachebro on-session-end  Display last session stats (used by editor hooks)
-  cachebro help            Show this help message
+  cachebro init              Auto-configure cachebro for your editor
+  cachebro uninit            Remove cachebro configuration
+  cachebro index             Full repository indexing
+  cachebro serve             Start the MCP server (default)
+  cachebro status            Show cache statistics
+  cachebro prune [N]         Prune old file versions (keep N, default 5)
+  cachebro on-session-start  Inject session state into context (hook)
+  cachebro on-stop           Show per-response savings (hook)
+  cachebro on-session-end    Display session summary (hook)
+  cachebro help              Show this help message
 
 Environment:
   CACHEBRO_DIR       Cache directory (default: .cachebro)`);

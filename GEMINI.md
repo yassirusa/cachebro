@@ -6,7 +6,7 @@
 ### Main Technologies
 - **Runtime & Tooling:** [Bun](https://bun.sh) (for building, testing, and execution)
 - **Language:** TypeScript
-- **Database:** [Turso](https://turso.tech) / SQLite (embedded for local persistence)
+- **Database:** SQLite (embedded for local persistence)
 - **Protocol:** [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
 - **Validation:** [Zod](https://zod.dev)
 
@@ -17,7 +17,7 @@ The project is structured as a TypeScript monorepo:
   - `FileWatcher`: Handles filesystem change notifications.
   - `computeDiff`: Logic for generating line-based unified diffs.
 - `packages/cli/`: Batteries-included CLI and MCP server implementation.
-  - `mcp.ts`: Implementation of the MCP server and its tools (`read_file`, `read_files`, `cache_status`, `cache_clear`).
+  - `mcp.ts`: Implementation of the MCP server and its tools.
 - `test/`: Contains smoke tests to verify core functionality.
 
 ## Building and Running
@@ -55,6 +55,31 @@ The project uses Bun for its lifecycle scripts.
 - **Session Isolation:** Each session (e.g., a specific chat or task) tracks its own read history independently via `sessionId`.
 - **Content Hashing:** SHA-256 hashes are used as the source of truth for change detection.
 
+## MCP Tools
+
+### File Operations
+- `read_file` — Read a file with caching (returns diff on re-read if changed, or unchanged marker)
+- `read_files` — Batch read multiple files with caching
+- `ls` — List directory contents (cached)
+
+### Search
+- `grep` / `search` — Fast FTS5-powered search across the repository
+
+### Cache Management
+- `cache_status` — Show cache statistics and session summary
+- `cache_clear` — Clear all cached data
+- `summarize_session` — Generate a comprehensive session summary with metrics
+
+### Session Tools
+- `revert_file` — Revert file to previous cached version
+- `get_working_set` — List files touched in session with edit counts
+- `search_history` — View chronological read/write history
+
+## MCP Resources
+- `cachebro://status` — Session stats (files tracked, tokens saved)
+- `cachebro://working-set` — Current working set with edit counts
+- `cachebro://metrics` — Full per-tool metrics breakdown
+
 ## Memory & Context Management
 
 `cachebro` provides powerful tools to manage your context window and recover from errors.
@@ -67,7 +92,7 @@ When you finish a task, or when the user is about to exit:
 Before clearing context or when you notice the conversation getting too long:
 1.  **Call `cachebro.summarize_session()`**: This generates a portable summary of your work, including modified files and key decisions.
 2.  **Paste the output** into your new session or compaction summary.
-3.  **In the new session**: Call `cachebro.session_summary()` immediately to re-hydrate your "working memory" of what files you were editing.
+3.  **In the new session**: The SessionStart hook automatically injects your working set and session metrics into the context. You can also manually call `cachebro.session_summary()` for more detail.
 
 ### When you get lost or confused
 If you forget which files you modified or what the last error was:
